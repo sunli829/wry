@@ -91,6 +91,19 @@ impl InnerWebView {
   }
 
   #[inline]
+  pub async fn new_async(
+    window: &impl HasWindowHandle,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    let window = match window.window_handle()?.as_raw() {
+      RawWindowHandle::Win32(window) => HWND(window.hwnd.get() as _),
+      _ => return Err(Error::UnsupportedWindowHandle),
+    };
+    Self::new_in_hwnd_async(window, attributes, pl_attrs, false).await
+  }
+
+  #[inline]
   pub fn new_as_child(
     parent: &impl HasWindowHandle,
     attributes: WebViewAttributes,
@@ -102,6 +115,20 @@ impl InnerWebView {
     };
 
     Self::new_in_hwnd(parent, attributes, pl_attrs, true)
+  }
+
+  #[inline]
+  pub async fn new_as_child_async(
+    parent: &impl HasWindowHandle,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    let parent = match parent.window_handle()?.as_raw() {
+      RawWindowHandle::Win32(parent) => HWND(parent.hwnd.get() as _),
+      _ => return Err(Error::UnsupportedWindowHandle),
+    };
+
+    Self::new_in_hwnd_async(parent, attributes, pl_attrs, true).await
   }
 
   #[inline]
@@ -135,6 +162,79 @@ impl InnerWebView {
       Self::create_environment(&attributes, pl_attrs.clone())?
     };
     let controller = Self::create_controller(hwnd, &env, attributes.incognito, background_color)?;
+    let webview = Self::init_webview(
+      parent,
+      hwnd,
+      id.clone(),
+      attributes,
+      &env,
+      &controller,
+      pl_attrs,
+      is_child,
+    )?;
+
+    let drag_drop_controller = drop_handler.map(|handler| {
+      // Disable file drops, so our handler can capture it
+      unsafe {
+        let _ = controller
+          .cast::<ICoreWebView2Controller4>()
+          .and_then(|c| c.SetAllowExternalDrop(false));
+      }
+      DragDropController::new(hwnd, handler)
+    });
+
+    let w = Self {
+      id,
+      parent: RefCell::new(parent),
+      hwnd,
+      controller,
+      is_child,
+      webview,
+      env,
+      drag_drop_controller,
+    };
+
+    if is_child {
+      w.set_bounds(bounds.unwrap_or_default())?;
+    } else {
+      w.resize_to_parent()?;
+    }
+
+    Ok(w)
+  }
+
+  #[inline]
+  async fn new_in_hwnd_async(
+    parent: HWND,
+    mut attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+    is_child: bool,
+  ) -> Result<Self> {
+    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+
+    let hwnd = Self::create_container_hwnd(parent, &attributes, is_child)?;
+
+    let drop_handler = attributes.drag_drop_handler.take();
+    let bounds = attributes.bounds;
+
+    let id = attributes
+      .id
+      .map(|id| id.to_string())
+      .unwrap_or_else(|| (hwnd.0 as isize).to_string());
+
+    let background_color = if attributes.transparent {
+      Some((0, 0, 0, 0))
+    } else {
+      attributes.background_color
+    };
+
+    let env = if let Some(env) = &pl_attrs.environment {
+      env.clone()
+    } else {
+      Self::create_environment_async(&attributes, pl_attrs.clone()).await?
+    };
+    let controller =
+      Self::create_controller_async(hwnd, &env, attributes.incognito, background_color).await?;
     let webview = Self::init_webview(
       parent,
       hwnd,
@@ -361,6 +461,91 @@ impl InnerWebView {
   }
 
   #[inline]
+  async fn create_environment_async(
+    attributes: &WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<ICoreWebView2Environment> {
+    let data_directory = attributes
+      .context
+      .as_deref()
+      .and_then(|context| context.data_directory())
+      .map(HSTRING::from);
+
+    // additional browser args
+    let additional_browser_args = pl_attrs.additional_browser_args.unwrap_or_else(|| {
+      // remove "mini menu" - See https://github.com/tauri-apps/wry/issues/535
+      // and "smart screen" - See https://github.com/tauri-apps/tauri/issues/1345
+      // enable white flicker fix
+      let default_args = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+      let mut arguments = String::from(default_args);
+
+      if attributes.autoplay {
+        arguments.push_str(" --autoplay-policy=no-user-gesture-required");
+      }
+
+      if let Some(proxy_setting) = &attributes.proxy_config {
+        match proxy_setting {
+          ProxyConfig::Http(endpoint) => {
+            arguments.push_str(" --proxy-server=http://");
+            arguments.push_str(&endpoint.host);
+            arguments.push(':');
+            arguments.push_str(&endpoint.port);
+          }
+          ProxyConfig::Socks5(endpoint) => {
+            arguments.push_str(" --proxy-server=socks5://");
+            arguments.push_str(&endpoint.host);
+            arguments.push(':');
+            arguments.push_str(&endpoint.port);
+          }
+        };
+      }
+
+      arguments
+    });
+
+    let (tx, rx) = flume::unbounded();
+    let options = CoreWebView2EnvironmentOptions::default();
+    unsafe {
+      options.set_additional_browser_arguments(additional_browser_args);
+      options.set_are_browser_extensions_enabled(pl_attrs.browser_extensions_enabled);
+
+      // Get user's system language
+      let lcid = GetUserDefaultUILanguage();
+      let mut lang = [0; MAX_LOCALE_NAME as usize];
+      LCIDToLocaleName(lcid as u32, Some(&mut lang), LOCALE_ALLOW_NEUTRAL_NAMES);
+      options.set_language(String::from_utf16_lossy(&lang));
+
+      let scroll_bar_style = match pl_attrs.scroll_bar_style {
+        ScrollBarStyle::Default => COREWEBVIEW2_SCROLLBAR_STYLE_DEFAULT,
+        ScrollBarStyle::FluentOverlay => COREWEBVIEW2_SCROLLBAR_STYLE_FLUENT_OVERLAY,
+      };
+
+      options.set_scroll_bar_style(scroll_bar_style);
+
+      CreateCoreWebView2EnvironmentWithOptions(
+        PCWSTR::null(),
+        &data_directory.unwrap_or_default(),
+        &ICoreWebView2EnvironmentOptions::from(options),
+        // we don't use CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async
+        // as it uses an mspc::channel under the hood, so we can avoid using two channels
+        // by manually creating the callback handler and use webview2_com::with_with_bump
+        &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
+          move |error_code, environment| {
+            error_code?;
+            tx.send(environment.ok_or_else(|| windows::core::Error::from(E_POINTER)))
+              .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
+          },
+        )),
+      )?;
+    }
+
+    match rx.recv_async().await {
+      Ok(res) => res.map_err(Into::into),
+      Err(_) => Err(Error::WebView2Error(webview2_com::Error::TaskCanceled)),
+    }
+  }
+
+  #[inline]
   fn create_controller(
     hwnd: HWND,
     env: &ICoreWebView2Environment,
@@ -408,6 +593,59 @@ impl InnerWebView {
     }
 
     webview2_com::wait_with_pump(rx)?.map_err(Into::into)
+  }
+
+  #[inline]
+  async fn create_controller_async(
+    hwnd: HWND,
+    env: &ICoreWebView2Environment,
+    incognito: bool,
+    background_color: Option<(u8, u8, u8, u8)>,
+  ) -> Result<ICoreWebView2Controller> {
+    let (tx, rx) = flume::unbounded();
+    let env = env.clone();
+    let env10 = env.cast::<ICoreWebView2Environment10>();
+
+    // we don't use CreateCoreWebView2ControllerCompletedHandler::wait_for_async
+    // as it uses an mspc::channel under the hood, so we can avoid using two channels
+    // by manually creating the callback handler and use webview2_com::with_with_bump
+    let handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
+      move |error_code, controller| {
+        error_code?;
+        tx.send(controller.ok_or_else(|| windows::core::Error::from(E_POINTER)))
+          .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
+      },
+    ));
+
+    unsafe {
+      if let Ok(env10) = env10 {
+        let controller_opts = env10.CreateCoreWebView2ControllerOptions()?;
+
+        if let Some((r, g, b, mut a)) = background_color {
+          if let Ok(opts3) = controller_opts.cast::<ICoreWebView2ControllerOptions3>() {
+            if a != 0 {
+              a = 255;
+            }
+            opts3.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+              R: r,
+              G: g,
+              B: b,
+              A: a,
+            })?;
+          }
+        }
+
+        controller_opts.SetIsInPrivateModeEnabled(incognito)?;
+        env10.CreateCoreWebView2ControllerWithOptions(hwnd, &controller_opts, &handler)?;
+      } else {
+        env.CreateCoreWebView2Controller(hwnd, &handler)?
+      }
+    }
+
+    match rx.recv_async().await {
+      Ok(res) => res.map_err(Into::into),
+      Err(_) => Err(Error::WebView2Error(webview2_com::Error::TaskCanceled)),
+    }
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -754,7 +992,7 @@ impl InnerWebView {
           let deferral = args.GetDeferral()?;
           let deferral = UnsafeSend(deferral);
           let args = UnsafeSend(args);
-          let hwnd = UnsafeSend(hwnd.clone());
+          let hwnd = UnsafeSend(hwnd);
           std::thread::spawn(move || match new_window_req_handler(uri, features) {
             NewWindowResponse::Allow => {
               let _ = args.take().SetHandled(false);
@@ -1351,7 +1589,7 @@ impl InnerWebView {
 
 /// Public APIs
 impl InnerWebView {
-  pub fn id(&self) -> crate::WebViewId {
+  pub fn id(&self) -> crate::WebViewId<'_> {
     &self.id
   }
 

@@ -176,6 +176,14 @@ impl InnerWebView {
     unsafe { Self::new_ns_view(&*(ns_view as *mut NSView), attributes, pl_attrs, false) }
   }
 
+  pub async fn new_async(
+    window: &impl HasWindowHandle,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    Self::new(window, attributes, pl_attrs)
+  }
+
   pub fn new_as_child(
     window: &impl HasWindowHandle,
     attributes: WebViewAttributes,
@@ -190,6 +198,14 @@ impl InnerWebView {
     };
 
     unsafe { Self::new_ns_view(&*(ns_view as *mut NSView), attributes, pl_attrs, true) }
+  }
+
+  pub async fn new_as_child_async(
+    window: &impl HasWindowHandle,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    Self::new_as_child(window, attributes, pl_attrs)
   }
 
   fn new_ns_view(

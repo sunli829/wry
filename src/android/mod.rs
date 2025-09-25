@@ -158,6 +158,14 @@ impl InnerWebView {
     Self::new(_window, attributes, pl_attrs)
   }
 
+  pub async fn new_as_child_async(
+    _window: &impl HasWindowHandle,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    Self::new_as_child(_window, attributes, pl_attrs)
+  }
+
   pub fn new(
     _window: &impl HasWindowHandle,
     attributes: WebViewAttributes,
@@ -341,6 +349,14 @@ impl InnerWebView {
     }));
 
     Ok(Self { id })
+  }
+
+  pub async fn new_async(
+    _window: &impl HasWindowHandle,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    Self::new(_window, attributes, pl_attrs)
   }
 
   pub fn print(&self) -> crate::Result<()> {

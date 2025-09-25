@@ -118,6 +118,14 @@ impl InnerWebView {
     }
   }
 
+  pub async fn new_async<W: HasWindowHandle>(
+    window: &W,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    Self::new(window, attributes, pl_attrs)
+  }
+
   pub fn new_as_child<W: HasWindowHandle>(
     parent: &W,
     attributes: WebViewAttributes,
@@ -134,6 +142,14 @@ impl InnerWebView {
       let _ = pl_attrs;
       Err(Error::UnsupportedWindowHandle)
     }
+  }
+
+  pub async fn new_as_child_async<W: HasWindowHandle>(
+    parent: &W,
+    attributes: WebViewAttributes<'_>,
+    pl_attrs: super::PlatformSpecificWebViewAttributes,
+  ) -> Result<Self> {
+    Self::new_as_child(parent, attributes, pl_attrs)
   }
 
   #[cfg(feature = "x11")]

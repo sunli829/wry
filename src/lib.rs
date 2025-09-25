@@ -1427,6 +1427,15 @@ impl<'a> WebViewBuilder<'a> {
     InnerWebView::new(window, self.attrs, self.platform_specific).map(|webview| WebView { webview })
   }
 
+  /// Consume the builder and create the [`WebView`] from a type that implements [`HasWindowHandle`] in an async context.
+  pub async fn build_async<W: HasWindowHandle>(self, window: &'a W) -> Result<WebView> {
+    self.error?;
+
+    InnerWebView::new_async(window, self.attrs, self.platform_specific)
+      .await
+      .map(|webview| WebView { webview })
+  }
+
   /// Consume the builder and create the [`WebView`] as a child window inside the provided [`HasWindowHandle`].
   ///
   /// ## Platform-specific
@@ -1453,6 +1462,15 @@ impl<'a> WebViewBuilder<'a> {
     self.error?;
 
     InnerWebView::new_as_child(window, self.attrs, self.platform_specific)
+      .map(|webview| WebView { webview })
+  }
+
+  /// Consume the builder and create the [`WebView`] as a child window inside the provided [`HasWindowHandle`] in an async context.
+  pub async fn build_as_child_async<W: HasWindowHandle>(self, window: &'a W) -> Result<WebView> {
+    self.error?;
+
+    InnerWebView::new_as_child_async(window, self.attrs, self.platform_specific)
+      .await
       .map(|webview| WebView { webview })
   }
 }

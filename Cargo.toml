@@ -75,6 +75,7 @@ webview2-com = "0.38"
 windows-version = "0.1"
 windows-core = "0.61"
 dunce = "1"
+flume = "0.11.1"
 
 [target."cfg(target_os = \"windows\")".dependencies.windows]
 version = "0.61"
@@ -207,7 +208,7 @@ tao-macros = "0.1"
 libc = "0.2"
 
 [dev-dependencies]
-pollster = "0.4.0"
+pollster = { version = "0.4.0", features = ["macro"] }
 tao = "0.34"
 wgpu = "23"
 winit = "0.30"
