@@ -1519,6 +1519,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "lb-wry"
+version = "0.53.3"
+dependencies = [
+ "base64",
+ "block2 0.6.0",
+ "cookie",
+ "crossbeam-channel",
+ "dirs",
+ "dpi",
+ "dunce",
+ "flume",
+ "gdkx11",
+ "getrandom 0.3.1",
+ "gtk",
+ "html5ever",
+ "http",
+ "http-range",
+ "javascriptcore-rs",
+ "jni",
+ "kuchikiki",
+ "libc",
+ "ndk",
+ "objc2 0.6.0",
+ "objc2-app-kit 0.3.0",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.0",
+ "objc2-ui-kit 0.3.0",
+ "objc2-web-kit",
+ "once_cell",
+ "percent-encoding",
+ "pollster",
+ "raw-window-handle",
+ "sha2",
+ "soup3",
+ "tao",
+ "tao-macros",
+ "thiserror 2.0.11",
+ "tracing",
+ "url",
+ "webkit2gtk",
+ "webkit2gtk-sys",
+ "webview2-com",
+ "wgpu",
+ "windows 0.61.1",
+ "windows-core 0.61.0",
+ "windows-version",
+ "winit",
+ "x11-dl",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.169"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4177,57 +4228,6 @@ name = "writeable"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e9df38ee2d2c3c5948ea468a8406ff0db0b29ae1ffde1bcf20ef305bcc95c51"
-
-[[package]]
-name = "wry"
-version = "0.53.3"
-dependencies = [
- "base64",
- "block2 0.6.0",
- "cookie",
- "crossbeam-channel",
- "dirs",
- "dpi",
- "dunce",
- "flume",
- "gdkx11",
- "getrandom 0.3.1",
- "gtk",
- "html5ever",
- "http",
- "http-range",
- "javascriptcore-rs",
- "jni",
- "kuchikiki",
- "libc",
- "ndk",
- "objc2 0.6.0",
- "objc2-app-kit 0.3.0",
- "objc2-core-foundation",
- "objc2-foundation 0.3.0",
- "objc2-ui-kit 0.3.0",
- "objc2-web-kit",
- "once_cell",
- "percent-encoding",
- "pollster",
- "raw-window-handle",
- "sha2",
- "soup3",
- "tao",
- "tao-macros",
- "thiserror 2.0.11",
- "tracing",
- "url",
- "webkit2gtk",
- "webkit2gtk-sys",
- "webview2-com",
- "wgpu",
- "windows 0.61.1",
- "windows-core 0.61.0",
- "windows-version",
- "winit",
- "x11-dl",
-]
 
 [[package]]
 name = "x11"
