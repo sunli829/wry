@@ -396,7 +396,8 @@ pub use self::webview2::ScrollBarStyle;
 use self::webview2::*;
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-  ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
+  ICoreWebView2, ICoreWebView2CompositionController, ICoreWebView2Controller,
+  ICoreWebView2Environment,
 };
 
 use std::{borrow::Cow, collections::HashMap, path::PathBuf, rc::Rc};
@@ -1645,6 +1646,7 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   extension_path: Option<PathBuf>,
   default_context_menus: bool,
   environment: Option<ICoreWebView2Environment>,
+  composition_root_visual: Option<windows::core::IUnknown>,
 }
 
 #[cfg(windows)]
@@ -1660,6 +1662,7 @@ impl Default for PlatformSpecificWebViewAttributes {
       browser_extensions_enabled: false,
       extension_path: None,
       environment: None,
+      composition_root_visual: None,
     }
   }
 }
@@ -1736,6 +1739,13 @@ pub trait WebViewBuilderExtWindows {
   /// Set the environment for the webview.
   /// Useful if you need to share the same environment, for instance when using the [`WebViewBuilder::with_new_window_req_handler`].
   fn with_environment(self, environment: ICoreWebView2Environment) -> Self;
+
+  /// Hosts WebView2 in a DirectComposition visual instead of a child HWND.
+  ///
+  /// The visual must belong to the same DirectComposition device and target
+  /// tree as the parent window. The host is responsible for positioning the
+  /// visual and forwarding pointer input through the composition controller.
+  fn with_composition_root_visual(self, root_visual: windows::core::IUnknown) -> Self;
 }
 
 #[cfg(windows)]
@@ -1782,6 +1792,14 @@ impl WebViewBuilderExtWindows for WebViewBuilder<'_> {
 
   fn with_environment(mut self, environment: ICoreWebView2Environment) -> Self {
     self.platform_specific.environment.replace(environment);
+    self
+  }
+
+  fn with_composition_root_visual(mut self, root_visual: windows::core::IUnknown) -> Self {
+    self
+      .platform_specific
+      .composition_root_visual
+      .replace(root_visual);
     self
   }
 }
@@ -2225,6 +2243,10 @@ pub trait WebViewExtWindows {
   /// Returns the WebView2 controller.
   fn controller(&self) -> ICoreWebView2Controller;
 
+  /// Returns the WebView2 composition controller when composition hosting was
+  /// requested on the builder.
+  fn composition_controller(&self) -> Option<ICoreWebView2CompositionController>;
+
   /// Webview environment.
   fn environment(&self) -> ICoreWebView2Environment;
 
@@ -2259,6 +2281,10 @@ pub trait WebViewExtWindows {
 impl WebViewExtWindows for WebView {
   fn controller(&self) -> ICoreWebView2Controller {
     self.webview.controller.clone()
+  }
+
+  fn composition_controller(&self) -> Option<ICoreWebView2CompositionController> {
+    self.webview.composition_controller.clone()
   }
 
   fn environment(&self) -> ICoreWebView2Environment {

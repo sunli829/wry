@@ -57,7 +57,9 @@ pub(crate) struct InnerWebView {
   parent: RefCell<HWND>,
   hwnd: HWND,
   is_child: bool,
+  owns_hwnd: bool,
   pub controller: ICoreWebView2Controller,
+  pub composition_controller: Option<ICoreWebView2CompositionController>,
   pub webview: ICoreWebView2,
   pub env: ICoreWebView2Environment,
   // Store FileDropController in here to make sure it gets dropped when
@@ -69,7 +71,7 @@ pub(crate) struct InnerWebView {
 impl Drop for InnerWebView {
   fn drop(&mut self) {
     let _ = unsafe { self.controller.Close() };
-    if self.is_child {
+    if self.owns_hwnd {
       let _ = unsafe { DestroyWindow(self.hwnd) };
     }
     unsafe { Self::dettach_parent_subclass(*self.parent.borrow()) }
@@ -140,7 +142,12 @@ impl InnerWebView {
   ) -> Result<Self> {
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
-    let hwnd = Self::create_container_hwnd(parent, &attributes, is_child)?;
+    let composition_root_visual = pl_attrs.composition_root_visual.clone();
+    let hwnd = if composition_root_visual.is_some() {
+      parent
+    } else {
+      Self::create_container_hwnd(parent, &attributes, is_child)?
+    };
 
     let drop_handler = attributes.drag_drop_handler.take();
     let bounds = attributes.bounds;
@@ -161,7 +168,18 @@ impl InnerWebView {
     } else {
       Self::create_environment(&attributes, pl_attrs.clone())?
     };
-    let controller = Self::create_controller(hwnd, &env, attributes.incognito, background_color)?;
+    let (controller, composition_controller) = if let Some(root_visual) = composition_root_visual {
+      let composition_controller =
+        Self::create_composition_controller(parent, &env, attributes.incognito, background_color)?;
+      unsafe { composition_controller.SetRootVisualTarget(&root_visual)? };
+      let controller = composition_controller.cast::<ICoreWebView2Controller>()?;
+      (controller, Some(composition_controller))
+    } else {
+      (
+        Self::create_controller(hwnd, &env, attributes.incognito, background_color)?,
+        None,
+      )
+    };
     let webview = Self::init_webview(
       parent,
       hwnd,
@@ -170,7 +188,7 @@ impl InnerWebView {
       &env,
       &controller,
       pl_attrs,
-      is_child,
+      is_child || composition_controller.is_some(),
     )?;
 
     let drag_drop_controller = drop_handler.map(|handler| {
@@ -189,6 +207,8 @@ impl InnerWebView {
       hwnd,
       controller,
       is_child,
+      owns_hwnd: is_child && composition_controller.is_none(),
+      composition_controller,
       webview,
       env,
       drag_drop_controller,
@@ -212,7 +232,12 @@ impl InnerWebView {
   ) -> Result<Self> {
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
-    let hwnd = Self::create_container_hwnd(parent, &attributes, is_child)?;
+    let composition_root_visual = pl_attrs.composition_root_visual.clone();
+    let hwnd = if composition_root_visual.is_some() {
+      parent
+    } else {
+      Self::create_container_hwnd(parent, &attributes, is_child)?
+    };
 
     let drop_handler = attributes.drag_drop_handler.take();
     let bounds = attributes.bounds;
@@ -233,8 +258,23 @@ impl InnerWebView {
     } else {
       Self::create_environment_async(&attributes, pl_attrs.clone()).await?
     };
-    let controller =
-      Self::create_controller_async(hwnd, &env, attributes.incognito, background_color).await?;
+    let (controller, composition_controller) = if let Some(root_visual) = composition_root_visual {
+      let composition_controller = Self::create_composition_controller_async(
+        parent,
+        &env,
+        attributes.incognito,
+        background_color,
+      )
+      .await?;
+      unsafe { composition_controller.SetRootVisualTarget(&root_visual)? };
+      let controller = composition_controller.cast::<ICoreWebView2Controller>()?;
+      (controller, Some(composition_controller))
+    } else {
+      (
+        Self::create_controller_async(hwnd, &env, attributes.incognito, background_color).await?,
+        None,
+      )
+    };
     let webview = Self::init_webview(
       parent,
       hwnd,
@@ -243,7 +283,7 @@ impl InnerWebView {
       &env,
       &controller,
       pl_attrs,
-      is_child,
+      is_child || composition_controller.is_some(),
     )?;
 
     let drag_drop_controller = drop_handler.map(|handler| {
@@ -262,6 +302,8 @@ impl InnerWebView {
       hwnd,
       controller,
       is_child,
+      owns_hwnd: is_child && composition_controller.is_none(),
+      composition_controller,
       webview,
       env,
       drag_drop_controller,
@@ -596,6 +638,41 @@ impl InnerWebView {
   }
 
   #[inline]
+  fn create_composition_controller(
+    hwnd: HWND,
+    env: &ICoreWebView2Environment,
+    incognito: bool,
+    background_color: Option<(u8, u8, u8, u8)>,
+  ) -> Result<ICoreWebView2CompositionController> {
+    let (tx, rx) = mpsc::channel();
+    let env3 = env.cast::<ICoreWebView2Environment3>()?;
+    let env10 = env.cast::<ICoreWebView2Environment10>();
+    let handler = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
+      move |error_code, controller| {
+        error_code?;
+        tx.send(controller.ok_or_else(|| windows::core::Error::from(E_POINTER)))
+          .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
+      },
+    ));
+
+    unsafe {
+      if let Ok(env10) = env10 {
+        let controller_opts = env10.CreateCoreWebView2ControllerOptions()?;
+        Self::configure_controller_options(&controller_opts, incognito, background_color)?;
+        env10.CreateCoreWebView2CompositionControllerWithOptions(
+          hwnd,
+          &controller_opts,
+          &handler,
+        )?;
+      } else {
+        env3.CreateCoreWebView2CompositionController(hwnd, &handler)?;
+      }
+    }
+
+    webview2_com::wait_with_pump(rx)?.map_err(Into::into)
+  }
+
+  #[inline]
   async fn create_controller_async(
     hwnd: HWND,
     env: &ICoreWebView2Environment,
@@ -646,6 +723,67 @@ impl InnerWebView {
       Ok(res) => res.map_err(Into::into),
       Err(_) => Err(Error::WebView2Error(webview2_com::Error::TaskCanceled)),
     }
+  }
+
+  #[inline]
+  async fn create_composition_controller_async(
+    hwnd: HWND,
+    env: &ICoreWebView2Environment,
+    incognito: bool,
+    background_color: Option<(u8, u8, u8, u8)>,
+  ) -> Result<ICoreWebView2CompositionController> {
+    let (tx, rx) = flume::unbounded();
+    let env3 = env.cast::<ICoreWebView2Environment3>()?;
+    let env10 = env.cast::<ICoreWebView2Environment10>();
+    let handler = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
+      move |error_code, controller| {
+        error_code?;
+        tx.send(controller.ok_or_else(|| windows::core::Error::from(E_POINTER)))
+          .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
+      },
+    ));
+
+    unsafe {
+      if let Ok(env10) = env10 {
+        let controller_opts = env10.CreateCoreWebView2ControllerOptions()?;
+        Self::configure_controller_options(&controller_opts, incognito, background_color)?;
+        env10.CreateCoreWebView2CompositionControllerWithOptions(
+          hwnd,
+          &controller_opts,
+          &handler,
+        )?;
+      } else {
+        env3.CreateCoreWebView2CompositionController(hwnd, &handler)?;
+      }
+    }
+
+    match rx.recv_async().await {
+      Ok(res) => res.map_err(Into::into),
+      Err(_) => Err(Error::WebView2Error(webview2_com::Error::TaskCanceled)),
+    }
+  }
+
+  unsafe fn configure_controller_options(
+    controller_opts: &ICoreWebView2ControllerOptions,
+    incognito: bool,
+    background_color: Option<(u8, u8, u8, u8)>,
+  ) -> windows::core::Result<()> {
+    if let Some((r, g, b, mut a)) = background_color {
+      if let Ok(opts3) = controller_opts.cast::<ICoreWebView2ControllerOptions3>() {
+        if a != 0 {
+          a = 255;
+        }
+        unsafe {
+          opts3.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+            R: r,
+            G: g,
+            B: b,
+            A: a,
+          })?;
+        }
+      }
+    }
+    unsafe { controller_opts.SetIsInPrivateModeEnabled(incognito) }
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -1667,15 +1805,17 @@ impl InnerWebView {
         bottom: size.height,
       })?;
 
-      SetWindowPos(
-        self.hwnd,
-        None,
-        position.x,
-        position.y,
-        size.width,
-        size.height,
-        SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOZORDER,
-      )?;
+      if self.composition_controller.is_none() {
+        SetWindowPos(
+          self.hwnd,
+          None,
+          position.x,
+          position.y,
+          size.width,
+          size.height,
+          SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOZORDER,
+        )?;
+      }
     }
 
     Ok(())
@@ -1697,13 +1837,15 @@ impl InnerWebView {
 
   pub fn set_visible(&self, visible: bool) -> Result<()> {
     unsafe {
-      let _ = ShowWindow(
-        self.hwnd,
-        match visible {
-          true => SW_SHOW,
-          false => SW_HIDE,
-        },
-      );
+      if self.composition_controller.is_none() {
+        let _ = ShowWindow(
+          self.hwnd,
+          match visible {
+            true => SW_SHOW,
+            false => SW_HIDE,
+          },
+        );
+      }
 
       self.controller.SetIsVisible(visible)?;
     }
